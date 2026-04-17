@@ -56,6 +56,6 @@ jobs:
             export DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             export RDS_ENDPOINT=${{ secrets.RDS_ENDPOINT }}
             
-            docker-compose -f docker-compose.prod.yml pull
-            docker-compose -f docker-compose.prod.yml up -d
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
             docker image prune -f
