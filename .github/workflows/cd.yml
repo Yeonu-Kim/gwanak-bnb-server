@@ -36,7 +36,7 @@ jobs:
         uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: username
+          username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: IMAGE
           script: |
