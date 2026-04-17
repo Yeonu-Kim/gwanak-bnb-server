@@ -2,17 +2,16 @@ spring:
   application:
     name: gwanak-bnb-server
   datasource:
-    url: jdbc:mysql://mysql:3306/gwanakbnb?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Seoul&zeroDateTimeBehavior=convertToNull&rewriteBatchedStatements=true
-    username: devuser
-    password: devpassword
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
       ddl-auto: none
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
-        transaction:
-          format_sql: true
+        format_sql: true
     database-platform: org.hibernate.dialect.MySQLDialect
 
