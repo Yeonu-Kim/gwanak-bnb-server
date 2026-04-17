@@ -40,6 +40,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: IMAGE
           script: |
+            if [ ! -d ~/app ]; then
+            mkdir app
+            git clone https://github.com/Yeonu-Kim/gwanak-bnb-server.git ~/app
+            fi
+            cd ~/app
+            git pull origin main
+            
             aws ecr get-login-password --region ap-northeast-2 | \
               docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
             
