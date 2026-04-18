@@ -8,10 +8,15 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: create
     show-sql: false
     properties:
       hibernate:
         format_sql: true
     database-platform: org.hibernate.dialect.MySQLDialect
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:thisIsAVeryLongSecretKeyForJwtTokenGenerationAtLeast256BitsLong}
+    expiration: 3600
 
