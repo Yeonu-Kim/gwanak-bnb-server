@@ -9,9 +9,9 @@ jobs:
     if: github.event.label.name == 'resource report'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       issues: write
-      id-token: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -60,27 +60,68 @@ jobs:
           path: /tmp/report/
           retention-days: 30
 
-      - name: Post report to Issue
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const path = '/tmp/report/summary.md';
+      - name: Commit report to branch and create PR
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          BRANCH="resource-report/issue-${ISSUE_NUMBER}"
+          REPORT_DIR="/tmp/report"
+          DEST="resource-reports/issue-${ISSUE_NUMBER}"
 
-            let body = '## 🤖 Resource Report\n\n';
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-            if (fs.existsSync(path)) {
-              body += fs.readFileSync(path, 'utf8');
-            } else {
-              body += '> ⚠️ 리포트 생성에 실패했습니다. Action 로그를 확인해주세요.';
-            }
+          git checkout -b "${BRANCH}"
 
-            body += '\n\n---\n> 📎 전체 manifest 및 IAM 정책은 Action Artifacts에서 다운로드할 수 있습니다.';
+          mkdir -p "${DEST}"
+          cp "${REPORT_DIR}"/* "${DEST}/"
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ github.event.issue.number }},
-              body: body
-            });
+          git add "${DEST}"
+          git commit -m "chore: add resource report for issue #${ISSUE_NUMBER}"
+          git push origin "${BRANCH}" --force-with-lease
+
+          SUMMARY=$(cat "${REPORT_DIR}/summary.md" 2>/dev/null || echo "리포트 파일을 참고하세요.")
+          FILES=$(ls "${DEST}" | sed "s|^|- \`${DEST}/|; s|$|\`|")
+
+          PR_BODY="## Resource Report — Issue #${ISSUE_NUMBER}
+          
+            > 이 PR은 자동 생성되었습니다. 아래 항목을 직접 채워 넣은 뒤 머지하세요.
+          
+            ${SUMMARY}
+          
+          ---
+          ### 포함된 파일
+            ${FILES}"
+          
+          PR_URL=$(gh pr create \
+          --title "[Resource Report] Issue #${ISSUE_NUMBER} — ${{ github.event.repository.name }}" \
+          --body "${PR_BODY}" \
+          --base "${{ github.event.repository.default_branch }}" \
+          --head "${BRANCH}" \
+          --draft)
+          
+          echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
+
+      - name: Post comment to Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          PR_URL="${{ steps.create-pr.outputs.pr-url }}"
+          SUMMARY=$(cat /tmp/report/summary.md 2>/dev/null || echo "⚠️ 요약 파일을 찾을 수 없습니다. Action 로그를 확인해주세요.")
+          
+          COMMENT_BODY="## 🤖 Resource Report 생성 완료
+          
+            ${SUMMARY}
+          
+          ---
+          ### 📎 생성된 PR
+            ${PR_URL}
+            
+            > PR은 **Draft** 상태입니다. \`<PLACEHOLDER>\` 항목을 채운 뒤 Ready for review로 변경해주세요."
+            
+            gh issue comment "${ISSUE_NUMBER}" \
+              --repo "${{ github.repository }}" \
+              --body "${COMMENT_BODY}"
