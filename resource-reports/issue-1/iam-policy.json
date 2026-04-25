@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": [
+        "arn:aws:logs:ap-northeast-2:<ACCOUNT_ID>:log-group:/aws/eks/gwanak-bnb-server/*",
+        "arn:aws:logs:ap-northeast-2:<ACCOUNT_ID>:log-group:/aws/eks/gwanak-bnb-server*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:ap-northeast-2:<ACCOUNT_ID>:secret:gwanak-bnb-server/db-credentials-*"
+      ]
+    }
+  ]
+}
