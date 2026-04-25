@@ -107,7 +107,7 @@ jobs:
           **파일 1: docs/resources/iam-policy.json**
           최소 권한 원칙(Least Privilege)을 적용한 IAM 정책.
           - 코드에서 실제로 사용하는 액션만 포함
-          - 실제 AWS 조회로 확인된 리소스는 정확한 ARN 사용
+          - 실제 AWS 조회로 확인할 수 있더라도 보안에 문제가 있다면 반드시 플레이스홀더 사용
           - 확인되지 않은 리소스는 <ACCOUNT_ID>, <REGION> 등 플레이스홀더 사용
           - Statement별로 Sid와 설명적인 이름 부여
 
@@ -259,6 +259,7 @@ jobs:
             Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),
             mcp__aws-api__call_aws,mcp__aws-api__suggest_aws_commands
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: "false"
           claude_env: |
             ISSUE_NUMBER: ${{ github.event.issue.number }}
             AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
@@ -285,7 +286,7 @@ jobs:
           Triggered by: #${ISSUE_NUMBER} ${ISSUE_TITLE}
 
           Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-            git push origin "$BRANCH"
+            git push origin "$BRANCH" --force-with-lease
 
             cat > /tmp/pr_body.md << EOF
           ## 🔍 Resource Report — Issue #${ISSUE_NUMBER}
