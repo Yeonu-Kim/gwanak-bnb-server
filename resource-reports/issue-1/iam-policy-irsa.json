@@ -1,0 +1,16 @@
+// ⚠️ Java 앱 — 정적 코드 분석 불가, 서비스 힌트 기반 생성. 배포 전 보안 검토 필요.
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:gwanak-bnb-server/prod/*",
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:gwanak-bnb-server/dev/*"
+      ]
+    }
+  ]
+}
