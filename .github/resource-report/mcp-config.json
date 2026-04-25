@@ -1,9 +1,11 @@
 {
   "mcpServers": {
     "iam-policy-autopilot": {
-      "command": "npx",
-      "args": ["-y", "iam-policy-autopilot-mcp"],
-      "env": {}
+      "command": "uvx",
+      "args": ["iam-policy-autopilot", "mcp-server"],
+      "env": {
+        "AWS_REGION": "ap-northeast-2"
+      }
     }
   }
 }

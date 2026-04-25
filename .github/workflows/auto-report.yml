@@ -19,16 +19,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Set up MCP config
         run: |
           mkdir -p /tmp/mcp
           cat > /tmp/mcp/config.json << 'EOF'
           {
             "mcpServers": {
-              "iam-policy-autopilot": {
-                "command": "npx",
-                "args": ["-y", "iam-policy-autopilot-mcp"]
-              }
+                "iam-policy-autopilot": {
+                  "command": "uvx",
+                  "args": ["iam-policy-autopilot", "mcp-server"],
+                  "env": {
+                    "AWS_REGION": "ap-northeast-2"
+                  }
+                }
             }
           }
           EOF
