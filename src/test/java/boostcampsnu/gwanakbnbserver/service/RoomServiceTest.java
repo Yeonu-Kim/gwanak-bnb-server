@@ -77,7 +77,7 @@ class RoomServiceTest {
         given(roomRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .willReturn(new PageImpl<>(List.of(room)));
 
-        var result = roomService.getRooms(null, null, null, null, null, null, null, 0, 20);
+        var result = roomService.getRooms(null, null, null, null, null, null, null, null, 0, 20);
 
         assertThat(result.content()).hasSize(1);
         assertThat(result.totalElements()).isEqualTo(1);
@@ -87,7 +87,7 @@ class RoomServiceTest {
     @DisplayName("getRooms: checkOut이 checkIn 이전이면 INVALID_DATE_RANGE를 던진다")
     void getRooms_invalidDateRange_throwsError() {
         AppException ex = assertThrows(AppException.class, () ->
-                roomService.getRooms(null, null,
+                roomService.getRooms(null, null, null,
                         LocalDate.of(2025, 7, 10), LocalDate.of(2025, 7, 5),
                         null, null, null, 0, 20));
 

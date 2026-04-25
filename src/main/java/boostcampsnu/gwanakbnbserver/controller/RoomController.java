@@ -28,8 +28,12 @@ public class RoomController {
     private final ReviewService reviewService;
 
     @GetMapping
-    @Operation(summary = "숙소 목록 조회")
+    @Operation(summary = "숙소 목록 조회",
+            description = "keyword: 이름/설명 기반 시맨틱 검색 (MySQL FULLTEXT ngram). " +
+                    "regionId: 해당 Region의 위/경도 바운딩박스 내 숙소 반환. " +
+                    "checkIn+checkOut: 해당 기간에 예약 가능한 숙소만 반환.")
     public PageResponse<RoomSummaryResponse> getRooms(
+            @RequestParam(required = false) String keyword,
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) UUID regionId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate checkIn,
@@ -40,7 +44,7 @@ public class RoomController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return roomService.getRooms(categoryId, regionId, checkIn, checkOut, guests, minPrice, maxPrice, page, size);
+        return roomService.getRooms(keyword, categoryId, regionId, checkIn, checkOut, guests, minPrice, maxPrice, page, size);
     }
 
     @GetMapping("/{roomId}")

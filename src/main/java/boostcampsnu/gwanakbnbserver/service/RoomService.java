@@ -36,7 +36,8 @@ public class RoomService {
     private final ReservationRepository reservationRepository;
 
     @Transactional(readOnly = true)
-    public PageResponse<RoomSummaryResponse> getRooms(UUID categoryId, UUID regionId,
+    public PageResponse<RoomSummaryResponse> getRooms(String keyword,
+                                                       UUID categoryId, UUID regionId,
                                                        LocalDate checkIn, LocalDate checkOut,
                                                        Integer guests,
                                                        BigDecimal minPrice, BigDecimal maxPrice,
@@ -45,21 +46,46 @@ public class RoomService {
             throw new AppException(ErrorCode.INVALID_DATE_RANGE);
         }
 
+        // FULLTEXT 검색: 관련도 순으로 최대 200개 ID 조회 후 Specification 필터에 전달
+        List<UUID> keywordMatchedIds = null;
+        if (keyword != null && !keyword.isBlank()) {
+            keywordMatchedIds = roomRepository.findIdsByKeyword(keyword.trim())
+                    .stream()
+                    .map(RoomService::hexToUuid)
+                    .toList();
+        }
+
         int clampedSize = Math.min(size, 50);
         Pageable pageable = PageRequest.of(page, clampedSize);
 
         return PageResponse.from(
                 roomRepository.findAll(
-                        RoomSpecification.withFilters(categoryId, regionId, guests, minPrice, maxPrice),
+                        RoomSpecification.withFilters(
+                                categoryId, regionId, guests, minPrice, maxPrice,
+                                checkIn, checkOut, keywordMatchedIds),
                         pageable
                 ).map(RoomSummaryResponse::from)
         );
     }
 
+    /** BINARY(16)로 저장된 UUID의 HEX 문자열을 UUID로 변환한다. */
+    private static UUID hexToUuid(String hex) {
+        return UUID.fromString(
+                hex.substring(0, 8) + "-" +
+                hex.substring(8, 12) + "-" +
+                hex.substring(12, 16) + "-" +
+                hex.substring(16, 20) + "-" +
+                hex.substring(20)
+        );
+    }
+
     @Transactional(readOnly = true)
     public RoomDetailResponse getRoom(UUID roomId) {
-        Room room = roomRepository.findByIdWithDetails(roomId)
+        Room room = roomRepository.findByIdWithImages(roomId)
                 .orElseThrow(() -> new AppException(ErrorCode.ROOM_NOT_FOUND));
+
+        roomRepository.findByIdWithDiscounts(roomId);
+
         return RoomDetailResponse.from(room);
     }
 

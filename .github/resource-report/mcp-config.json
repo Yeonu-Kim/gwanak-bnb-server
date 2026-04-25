@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "iam-policy-autopilot": {
+      "command": "npx",
+      "args": ["-y", "iam-policy-autopilot-mcp"],
+      "env": {}
+    }
+  }
+}

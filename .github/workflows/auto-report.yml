@@ -1,19 +1,17 @@
-name: Resource Report Generator
+name: Resource Report
 
 on:
   issues:
     types: [labeled]
 
 jobs:
-  generate-resource-report:
+  resource-report:
     if: github.event.label.name == 'resource report'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
-      id-token: write # AWS OIDC 인증에 필요
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -21,464 +19,68 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ── AWS 인증 (OIDC) ──────────────────────────────────────────────
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
-
-      # ── uv 설치 ──────────────────
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      # ── MCP config 파일 생성 ─────────────────────────────────────────
-      # iam-policy-autopilot: IAM policy 생성/검증에 특화된 MCP 서버
-      # Claude Code CLI가 --mcp-config를 받아서 child process로 spawn.
-      - name: Write MCP config
+      - name: Set up MCP config
         run: |
           mkdir -p /tmp/mcp
           cat > /tmp/mcp/config.json << 'EOF'
           {
             "mcpServers": {
               "iam-policy-autopilot": {
-                "command": "uvx",
-                "args": ["iam-policy-autopilot", "mcp-server"],
-                "env": {
-                  "AWS_REGION": "${{ vars.AWS_REGION || 'ap-northeast-2' }}"
-                }
+                "command": "npx",
+                "args": ["-y", "iam-policy-autopilot-mcp"]
               }
             }
           }
           EOF
 
-      # ── 프롬프트 파일 생성 ───────────────────────────────────────────
-      - name: Write analysis prompt
-        env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          REPO: ${{ github.repository }}
-          AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
-        run: |
-          mkdir -p /tmp/mcp
-          cat > /tmp/mcp/prompt.md << PROMPT
-          # EKS 배포 Resource Report 생성 요청
+      - name: Copy prompt
+        run: cp .github/resource-report/prompt.md /tmp/mcp/prompt.md
 
-          ## 컨텍스트
-          - 레포지토리: ${REPO}
-          - 이슈 번호: #${ISSUE_NUMBER}
-          - 이슈 제목: ${ISSUE_TITLE}
-          - AWS 리전: ${AWS_REGION}
-          - 목표: Amazon EKS 신규 배포 (EKS 환경 미구성 상태)
-
-          ## 이슈 내용
-          ${ISSUE_BODY}
-
-          ## 분석 원칙
-          - 추론이 아닌 코드에서 명시적으로 확인된 내용만 반영한다
-          - 확인되지 않은 값은 반드시 <PLACEHOLDER> 형태로 표기한다
-          - 코드에서 실제로 사용하지 않는 AWS 서비스의 IAM 권한은 절대 추가하지 않는다
-          - GitHub Actions 배포 파이프라인 관련 권한은 포함하지 않는다
-          - EKS에서 실행되는 애플리케이션 Pod에 필요한 내용만 생성한다
-
-          ## 작업 지시
-
-          아래 단계를 순서대로 수행하세요.
-
-          ### Step 1: 애플리케이션 분석
-          아래 파일들을 순서대로 확인하세요. 없는 파일은 스킵하세요.
-
-          1) 패키지 매니저 파일 (존재하는 것 모두 읽기)
-             - build.gradle, build.gradle.kts, pom.xml (Java/Kotlin)
-               → AWS SDK: software.amazon.awssdk:*, com.amazonaws:*
-               → 메모리 산정용 의존성: spring-boot-starter-web/data-jpa/security 등
-             - package.json (Node.js)
-               → AWS SDK: aws-sdk, @aws-sdk/*
-             - requirements.txt, pyproject.toml, Pipfile (Python)
-               → AWS SDK: boto3, botocore
-             - go.mod (Go)
-               → AWS SDK: github.com/aws/aws-sdk-go-v2
-
-          2) 환경 설정 파일
-             - src/main/resources/application*.yml 또는 application*.properties
-               → server.port 확인
-               → management.endpoints(actuator) 설정 확인 → probe path 결정에 사용
-               → datasource 설정 확인 → RDS password 인증 여부 파악
-               → cloud.aws.*, spring.redis.*, spring.mail.* 등 AWS 서비스 연동 여부 확인
-             - .env, .env.prod, .env.example (있으면 읽기)
-               → AWS_*, S3_*, SES_*, REDIS_* 등 환경변수명으로 서비스 유추
-             - docker-compose*.yml (있으면 읽기)
-               → environment 섹션의 AWS 관련 변수 확인
-
-          3) Dockerfile (또는 Dockerfile.prod)
-             - 베이스 이미지, EXPOSE 포트, ENTRYPOINT/CMD 확인
-             - JAVA_OPTS 또는 JVM 힙 설정(-Xmx, -Xms) 확인
-             - ENV, ARG의 AWS 관련 설정 확인
-
-          4) 소스 코드 AWS 키워드 검색
-             아래 Bash 명령어를 실행해서 AWS 관련 코드를 한 번에 탐색하세요:
-             Bash: grep -r "amazonaws|aws-sdk|S3Client|SqsClient|SesClient|ElastiCacheClient|CloudFrontClient|RdsClient|boto3|@aws-sdk" src/ --include="*.java" --include="*.kt" --include="*.py" --include="*.js" --include="*.ts" --include="*.go" -l 2>/dev/null
-             (파일 목록만 출력. 결과가 없으면 AWS SDK 미사용으로 기록)
-
-          ### Step 2: 사용 중인 AWS 서비스 감지 및 service-hints 구성
-          Step 1 분석 결과를 바탕으로 아래 서비스 목록 중 실제로 사용하는 것을 골라내세요.
-
-          감지 대상 서비스 (이 목록 외에는 추가하지 말 것):
-          - eks: EKS 클러스터 관련 호출
-          - ec2: EC2 인스턴스/보안그룹/네트워크 관련 호출
-          - rds: RDS 데이터베이스 연결 (password 인증이면 제외)
-          - elasticache: ElastiCache/Redis 연결
-          - s3: S3 버킷 읽기/쓰기
-          - cloudfront: CloudFront 배포 관련
-          - ses: 이메일 발송 (JavaMailSender + SES, spring-boot-starter-mail 등)
-          - sqs: 메시지 큐
-          - sns: 알림 발송
-
-          감지 기준 (우선순위 순):
-          1) build.gradle의 AWS SDK 의존성
-             - software.amazon.awssdk:s3 → s3
-             - software.amazon.awssdk:elasticache → elasticache
-             - software.amazon.awssdk:ses → ses
-             - software.amazon.awssdk:sqs → sqs
-             - spring-boot-starter-mail + SES 설정 → ses
-          2) application.yml/properties의 외부 서비스 설정
-             - spring.data.redis 또는 spring.redis → elasticache
-             - spring.mail.host가 email-smtp.*.amazonaws.com → ses
-             - cloud.aws.* 설정 → 해당 서비스
-          3) src/ 소스 코드의 import 및 클라이언트 사용
-             - S3Client, AmazonS3 → s3
-             - ElastiCacheClient → elasticache
-             - SesClient, AmazonSimpleEmailService → ses
-             - SqsClient → sqs
-             - JavaMailSender with SES → ses
-
-          ### Step 3: IAM Policy 생성 (EKS Pod용 IRSA 전용)
-          iam-policy-autopilot MCP 서버를 사용해 IAM policy를 생성하세요.
-
-          **AWS SDK 의존성(software.amazon.awssdk 또는 com.amazonaws)이 build.gradle에 있는 경우:**
-          generate_application_policies를 호출하세요.
-
-          호출 시 주의사항:
-          - SourceFiles: Bash의 find 결과를 그대로 사용할 것
-            (find src/main/java -name "*.java" 결과를 그대로 넣을 것)
-          - ServiceHints: Step 2에서 감지된 서비스만 포함
-          - Region: AWS_REGION 환경변수 값
-          - Account: "000000000000" (실제 계정 ID 미확정)
-
-          **AWS SDK 의존성이 없는 경우:**
-          MCP를 호출하지 말고 아래 인프라 권한만 직접 작성하세요:
-          - ecr:GetAuthorizationToken (Resource: *)
-          - ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
-            ecr:BatchCheckLayerAvailability (Resource: ECR 레포지토리 ARN)
-          - Step 2에서 감지된 서비스가 있으면 해당 서비스의 최소 권한 추가
-
-          MCP 호출이 실패하면 위 인프라 권한 + Step 2 감지 결과로 직접 작성하세요.
-
-          ### Step 4: 메모리/CPU 추정
-          Step 1~2 결과를 바탕으로 EKS Deployment의 resources를 추정하세요.
-
-          **메모리 추정 우선순위:**
-          1순위: Dockerfile의 JAVA_OPTS에 -Xmx가 있으면
-                 memory limit = -Xmx 값 × 1.3 (JVM 오버헤드 포함)
-                 memory request = -Xmx 값 × 1.0
-          2순위: 의존성 기반 산정
-                 - spring-boot-starter-web 기본: 300Mi
-                 - spring-boot-starter-data-jpa 추가: +100Mi
-                 - spring-security 추가: +50Mi
-                 - HikariCP 커넥션 풀(기본 10개): +50Mi
-                 - 합산 후 request = 합산값, limit = 합산값 × 1.5
-
-          **CPU 추정:**
-          - request: 100m (idle 상태 기준)
-          - limit: 500m (요청 처리 피크 기준)
-
-          추정 근거를 RESOURCES.md에 반드시 명시하세요.
-
-          ### Step 5: docs/resources/ 디렉터리에 파일 3개 생성
-
-          **파일 1: docs/resources/iam-policy.json**
-          EKS Pod (IRSA)용 IAM 정책만 작성하세요.
-
-          형식 예시:
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "ECRPull",
-                "Effect": "Allow",
-                "Action": [
-                  "ecr:GetAuthorizationToken"
-                ],
-                "Resource": "*"
-              },
-              {
-                "Sid": "ECRRepository",
-                "Effect": "Allow",
-                "Action": [
-                  "ecr:BatchGetImage",
-                  "ecr:GetDownloadUrlForLayer",
-                  "ecr:BatchCheckLayerAvailability"
-                ],
-                "Resource": "arn:aws:ecr:ap-northeast-2:<ACCOUNT_ID>:repository/<ECR_REPO_NAME>"
-              }
-            ]
-          }
-
-          **파일 2: docs/resources/k8s-resources.yaml**
-          Step 1~4의 분석 결과를 반영해서 작성하세요.
-          아래 구조를 그대로 따르세요.
-
-          주의사항:
-          - env는 application.yml에서 확인된 환경변수만 포함
-          - startupProbe path는 actuator 설정 기반으로 결정
-            (actuator 있으면 /actuator/health, 없으면 코드에서 확인한 헬스체크 경로)
-          - resources.requests/limits는 Step 4 추정값 사용
-          - nodeSelector, tolerations는 EKS 노드그룹 미확정이므로 <PLACEHOLDER> 처리
-
-          ---
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: <APP_NAME>
-            labels:
-              app: <APP_NAME>
-            namespace: <NAMESPACE>
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: <APP_NAME>
-            strategy:
-              type: RollingUpdate
-              rollingUpdate:
-                maxSurge: 25%
-                maxUnavailable: 25%
-            revisionHistoryLimit: 4
-            template:
-              metadata:
-                labels:
-                  app: <APP_NAME>
-              spec:
-                serviceAccountName: <SERVICE_ACCOUNT_NAME>
-                nodeSelector:
-                  kubernetes.io/arch: <ARCH>
-                  phase: prod
-                tolerations:
-                  - effect: NoSchedule
-                    key: phase
-                    operator: Equal
-                    value: prod
-                containers:
-                  - image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/<ECR_REPO>:<IMAGE_TAG>
-                    name: <APP_NAME>
-                    env:
-                      - name: <ENV_KEY>
-                        value: "<ENV_VALUE>"
-                    resources:
-                      requests:
-                        cpu: <CPU_REQUEST>
-                        memory: <MEMORY_REQUEST>
-                      limits:
-                        cpu: <CPU_LIMIT>
-                        memory: <MEMORY_LIMIT>
-                    ports:
-                      - containerPort: <PORT>
-                    startupProbe:
-                      httpGet:
-                        path: <STARTUP_PROBE_PATH>
-                        port: <PORT>
-                      initialDelaySeconds: 30
-                      failureThreshold: 20
-                      periodSeconds: 5
-                    livenessProbe:
-                      httpGet:
-                        path: <LIVENESS_PROBE_PATH>
-                        port: <PORT>
-                      periodSeconds: 30
-                      failureThreshold: 3
-                    readinessProbe:
-                      httpGet:
-                        path: <READINESS_PROBE_PATH>
-                        port: <PORT>
-                      periodSeconds: 10
-                      failureThreshold: 3
-          ---
-          apiVersion: v1
-          kind: ServiceAccount
-          metadata:
-            name: <SERVICE_ACCOUNT_NAME>
-            namespace: <NAMESPACE>
-            annotations:
-              eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<IAM_ROLE_NAME>
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            namespace: <NAMESPACE>
-            name: <APP_NAME>
-          spec:
-            type: ClusterIP
-            selector:
-              app: <APP_NAME>
-            ports:
-              - port: 80
-                targetPort: <PORT>
-          ---
-          apiVersion: networking.istio.io/v1alpha3
-          kind: VirtualService
-          metadata:
-            namespace: <NAMESPACE>
-            name: <APP_NAME>
-          spec:
-            gateways:
-              - <ISTIO_GATEWAY>
-              - mesh
-            hosts:
-              - <API_HOSTNAME>
-            http:
-              - route:
-                  - destination:
-                      host: <APP_NAME>
-
-          **파일 3: docs/resources/RESOURCES.md**
-          한국어로 작성하세요. 아래 항목을 모두 포함하세요:
-
-          1. 프로젝트 개요
-             - 사용 중인 AWS 서비스 목록 (코드에서 확인된 것만)
-             - EKS 배포 대상 애플리케이션 개요
-
-          2. IAM 정책 설명 (EKS Pod IRSA용)
-             - 각 Statement가 왜 필요한지 한 줄 설명
-             - 코드에서 확인된 근거 파일명 명시
-
-          3. 리소스 추정 근거
-             - 메모리/CPU 추정에 사용한 방법 (1순위/2순위 중 어떤 방법 사용했는지)
-             - 의존성 목록과 각 메모리 기여값
-
-          4. EKS 적용 전 필수 확인 체크리스트
-             - [ ] <ACCOUNT_ID> 실제 AWS 계정 ID로 교체
-             - [ ] <ECR_REPO_NAME> 실제 ECR 레포지토리 이름으로 교체
-             - [ ] <NAMESPACE> EKS 네임스페이스 결정 후 교체
-             - [ ] <ARCH> 노드그룹 아키텍처(arm64/amd64) 확인 후 교체
-             - [ ] <ISTIO_GATEWAY> Istio 게이트웨이 이름 확인 후 교체
-             - [ ] <API_HOSTNAME> 도메인 확정 후 교체
-             - [ ] IRSA용 IAM Role 생성 후 ARN 교체
-             - [ ] DB 비밀번호 등 민감 정보를 Kubernetes Secret으로 분리
-             - [ ] 실측 후 resources 값 재검토 (docker stats 또는 배포 후 CloudWatch)
-
-          5. 생성 정보
-             - 생성 일시
-             - 트리거 이슈: #${ISSUE_NUMBER}
-             - 분석 방법: 정적 코드 분석 + iam-policy-autopilot MCP
-
-          ### Step 6: 완료 확인
-          생성한 파일 3개의 경로를 출력하고 각 파일의 핵심 내용을 요약하세요.
-          특히 메모리 추정에 어떤 방법(1/2/3순위)을 사용했는지 명시하세요.
-          PROMPT
-
-      # ── Claude Code + AWS MCP 실행 ───────────────────────────────────
-      # claude-code-base-action@beta: mcp_config 파라미터 지원
-      # iam-policy-autopilot이 OIDC로 발급된 AWS 자격증명을 환경변수에서 자동 상속
-      - name: Run Claude Code with AWS MCP
+      - name: Run Claude Code
         uses: anthropics/claude-code-base-action@beta
         with:
           prompt_file: /tmp/mcp/prompt.md
           mcp_config: /tmp/mcp/config.json
           allowed_tools: >-
             Read,Write,Edit,
-            Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),Bash(grep:*),
+            Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),Bash(grep:*),Bash(docker:*),Bash(wc:*),Bash(head:*),Bash(tail:*),
             mcp__iam-policy-autopilot__generate_application_policies
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: "false"
           claude_env: |
             ISSUE_NUMBER: ${{ github.event.issue.number }}
-            AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+            ISSUE_BODY: ${{ toJson(github.event.issue.body) }}
+            REPO_NAME: ${{ github.event.repository.name }}
+            AWS_REGION: ap-northeast-2
 
-      # ── 브랜치 생성 및 PR ────────────────────────────────────────────
-      - name: Commit and create PR
-        id: pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-        run: |
-          BRANCH="resource-report/issue-${ISSUE_NUMBER}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+      - name: Upload report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-report-${{ github.event.issue.number }}
+          path: /tmp/report/
+          retention-days: 30
 
-          if [ -n "$(git status --porcelain docs/resources/)" ]; then
-            git add docs/resources/
-            git commit -m "feat: resource report for issue #${ISSUE_NUMBER}
+      - name: Post report to Issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = '/tmp/report/summary.md';
 
-          Auto-generated IAM policy and Kubernetes resource files.
-          Analyzed with iam-policy-autopilot MCP server.
-          Triggered by: #${ISSUE_NUMBER} ${ISSUE_TITLE}
+            let body = '## 🤖 Resource Report\n\n';
 
-          Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-            git push origin "$BRANCH" --force-with-lease
+            if (fs.existsSync(path)) {
+              body += fs.readFileSync(path, 'utf8');
+            } else {
+              body += '> ⚠️ 리포트 생성에 실패했습니다. Action 로그를 확인해주세요.';
+            }
 
-            cat > /tmp/pr_body.md << EOF
-          ## 🔍 Resource Report — Issue #${ISSUE_NUMBER}
+            body += '\n\n---\n> 📎 전체 manifest 및 IAM 정책은 Action Artifacts에서 다운로드할 수 있습니다.';
 
-          > **${ISSUE_TITLE}**
-
-          코드베이스 분석 + AWS 실제 리소스 조회를 기반으로 자동 생성된 리소스 리포트입니다.
-
-          ### 📦 생성된 파일
-
-          | 파일 | 설명 |
-          |------|------|
-          | \`docs/resources/iam-policy.json\` | IAM 권한 정책 (최소 권한 원칙) |
-          | \`docs/resources/k8s-resources.yaml\` | Kubernetes 리소스 매니페스트 |
-          | \`docs/resources/RESOURCES.md\` | 리소스 전체 요약 문서 (한국어) |
-
-          ### 🔧 분석 방법
-          - **코드 분석**: 소스 파일에서 AWS 서비스 사용 패턴 추출
-          - **IAM Policy 생성**: \`iam-policy-autopilot\` MCP로 best practice 기반 정책 생성
-          - 확인된 리소스는 정확한 ARN, 미확인은 \`<PLACEHOLDER>\` 표기
-
-          ### ⚠️ 적용 전 필수 확인
-          - [ ] IAM 정책의 플레이스홀더를 실제 값으로 교체
-          - [ ] Kubernetes 이미지 태그 및 리소스 요청값 검토
-          - [ ] 보안팀 리뷰
-
-          Closes #${ISSUE_NUMBER}
-          EOF
-
-            gh pr create \
-              --title "feat: resource report for issue #${ISSUE_NUMBER}" \
-              --body-file /tmp/pr_body.md \
-              --base main \
-              --head "$BRANCH"
-
-            echo "pr_created=true" >> $GITHUB_OUTPUT
-          else
-            echo "pr_created=false" >> $GITHUB_OUTPUT
-          fi
-
-      # ── 이슈에 결과 코멘트 ──────────────────────────────────────────
-      - name: Comment on issue
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          if [ "${{ steps.pr.outputs.pr_created }}" == "true" ]; then
-            gh issue comment "${ISSUE_NUMBER}" --body "✅ **Resource Report 생성 완료**
-
-          \`iam-policy-autopilot\` MCP를 통해 IAM 정책을 생성하고 분석했습니다.
-
-          생성된 파일:
-          - \`docs/resources/iam-policy.json\`
-          - \`docs/resources/k8s-resources.yaml\`
-          - \`docs/resources/RESOURCES.md\`
-
-          PR 브랜치: \`resource-report/issue-${ISSUE_NUMBER}\`"
-          else
-            gh issue comment "${ISSUE_NUMBER}" --body "⚠️ **Resource Report 생성 실패**
-
-          워크플로우가 실행되었지만 파일이 생성되지 않았습니다.
-          [Actions 로그](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})를 확인해주세요."
-          fi
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.issue.number }},
+              body: body
+            });

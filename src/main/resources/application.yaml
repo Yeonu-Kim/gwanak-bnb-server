@@ -1,6 +1,8 @@
 spring:
   application:
     name: gwanak-bnb-server
+  profiles:
+    active: dev
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${SPRING_DATASOURCE_USERNAME}
