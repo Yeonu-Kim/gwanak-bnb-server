@@ -26,7 +26,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
-          aws-region: "ap-northeast-2"
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
 
       # ── uv 설치 (awslabs MCP 서버가 uvx로 실행됨) ────────────────────
       - name: Install uv
@@ -46,7 +46,7 @@ jobs:
                 "command": "uvx",
                 "args": ["awslabs.aws-api-mcp-server@latest"],
                 "env": {
-                  "AWS_REGION": "ap-northeast-2",
+                  "AWS_REGION": "${{ vars.AWS_REGION || 'ap-northeast-2' }}",
                   "READ_OPERATIONS_ONLY": "true",
                   "FASTMCP_LOG_LEVEL": "ERROR"
                 }
@@ -62,7 +62,7 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           REPO: ${{ github.repository }}
-          AWS_REGION: "ap-northeast-2"
+          AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
         run: |
           mkdir -p /tmp/mcp
           cat > /tmp/mcp/prompt.md << PROMPT
@@ -257,11 +257,11 @@ jobs:
           allowed_tools: >-
             Read,Write,Edit,
             Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),
-            mcp__aws-api__aws_api_call
+            mcp__aws-api__call_aws,mcp__aws-api__suggest_aws_commands
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_env: |
             ISSUE_NUMBER: ${{ github.event.issue.number }}
-            AWS_REGION: "ap-northeast-2"
+            AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
 
       # ── 브랜치 생성 및 PR ────────────────────────────────────────────
       - name: Commit and create PR
@@ -319,9 +319,7 @@ jobs:
               --title "feat: resource report for issue #${ISSUE_NUMBER}" \
               --body-file /tmp/pr_body.md \
               --base main \
-              --head "$BRANCH" \
-              --label "resource report" \
-              --label "automated"
+              --head "$BRANCH"
 
             echo "pr_created=true" >> $GITHUB_OUTPUT
           else
