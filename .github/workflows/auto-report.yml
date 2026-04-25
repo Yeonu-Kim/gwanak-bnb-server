@@ -87,37 +87,96 @@ jobs:
           아래 단계를 순서대로 수행하세요.
 
           ### Step 1: 애플리케이션 분석
-          아래 파일들을 순서대로 읽고 애플리케이션 구조를 파악하세요.
-          파일이 없으면 없다고 기록하고 다음으로 넘어가세요.
+          아래 파일들을 순서대로 확인하세요. 없는 파일은 스킵하세요.
 
-          1) build.gradle 또는 pom.xml
-             - spring-boot-starter-web, spring-boot-starter-data-jpa, spring-security 등 의존성 목록 확인
-             - 의존성 기반 JVM 메모리 베이스라인 산정에 사용
+          1) 패키지 매니저 파일 (존재하는 것 모두 읽기)
+             - build.gradle, build.gradle.kts, pom.xml (Java/Kotlin)
+               → AWS SDK: software.amazon.awssdk:*, com.amazonaws:*
+               → 메모리 산정용 의존성: spring-boot-starter-web/data-jpa/security 등
+             - package.json (Node.js)
+               → AWS SDK: aws-sdk, @aws-sdk/*
+             - requirements.txt, pyproject.toml, Pipfile (Python)
+               → AWS SDK: boto3, botocore
+             - go.mod (Go)
+               → AWS SDK: github.com/aws/aws-sdk-go-v2
 
-          2) src/main/resources/application*.yml 또는 application*.properties
-             - server.port 확인
-             - management.endpoints(actuator) 설정 확인 → probe path 결정에 사용
-             - datasource 설정 확인 → RDS password 인증 여부 파악
-             - 외부 AWS 서비스 연동(S3, SQS, SNS 등) 여부 확인
+          2) 환경 설정 파일
+             - src/main/resources/application*.yml 또는 application*.properties
+               → server.port 확인
+               → management.endpoints(actuator) 설정 확인 → probe path 결정에 사용
+               → datasource 설정 확인 → RDS password 인증 여부 파악
+               → cloud.aws.*, spring.redis.*, spring.mail.* 등 AWS 서비스 연동 여부 확인
+             - .env, .env.prod, .env.example (있으면 읽기)
+               → AWS_*, S3_*, SES_*, REDIS_* 등 환경변수명으로 서비스 유추
+             - docker-compose*.yml (있으면 읽기)
+               → environment 섹션의 AWS 관련 변수 확인
 
           3) Dockerfile (또는 Dockerfile.prod)
              - 베이스 이미지, EXPOSE 포트, ENTRYPOINT/CMD 확인
              - JAVA_OPTS 또는 JVM 힙 설정(-Xmx, -Xms) 확인
+             - ENV, ARG의 AWS 관련 설정 확인
 
-          4) src/ 하위 소스 코드
-             - AWS SDK 직접 호출 여부 확인 (S3Client, SqsClient, SesClient 등)
-             - 확인된 AWS 서비스만 IAM 권한에 반영
+          4) 소스 코드 AWS 키워드 검색
+             아래 Bash 명령어를 실행해서 AWS 관련 코드를 한 번에 탐색하세요:
+             Bash: grep -r "amazonaws|aws-sdk|S3Client|SqsClient|SesClient|ElastiCacheClient|CloudFrontClient|RdsClient|boto3|@aws-sdk" src/ --include="*.java" --include="*.kt" --include="*.py" --include="*.js" --include="*.ts" --include="*.go" -l 2>/dev/null
+             (파일 목록만 출력. 결과가 없으면 AWS SDK 미사용으로 기록)
 
-          ### Step 2: IAM Policy 생성 (EKS Pod용 IRSA 전용)
-          iam-policy-autopilot MCP 서버를 사용해 EKS Pod에서 필요한 IAM policy를 생성하세요.
-          GitHub Actions 파이프라인용 권한은 포함하지 마세요.
+          ### Step 2: 사용 중인 AWS 서비스 감지 및 service-hints 구성
+          Step 1 분석 결과를 바탕으로 아래 서비스 목록 중 실제로 사용하는 것을 골라내세요.
 
-          포함할 권한:
-          - Step 1 소스 코드에서 실제로 확인된 AWS SDK 호출 권한만 추가
-          MCP 도구 호출이 실패하면 정적 분석 결과만으로 직접 작성하세요.
+          감지 대상 서비스 (이 목록 외에는 추가하지 말 것):
+          - eks: EKS 클러스터 관련 호출
+          - ec2: EC2 인스턴스/보안그룹/네트워크 관련 호출
+          - rds: RDS 데이터베이스 연결 (password 인증이면 제외)
+          - elasticache: ElastiCache/Redis 연결
+          - s3: S3 버킷 읽기/쓰기
+          - cloudfront: CloudFront 배포 관련
+          - ses: 이메일 발송 (JavaMailSender + SES, spring-boot-starter-mail 등)
+          - sqs: 메시지 큐
+          - sns: 알림 발송
 
-          ### Step 3: 메모리/CPU 추정
-          Step 1 결과를 바탕으로 EKS Deployment의 resources를 추정하세요.
+          감지 기준 (우선순위 순):
+          1) build.gradle의 AWS SDK 의존성
+             - software.amazon.awssdk:s3 → s3
+             - software.amazon.awssdk:elasticache → elasticache
+             - software.amazon.awssdk:ses → ses
+             - software.amazon.awssdk:sqs → sqs
+             - spring-boot-starter-mail + SES 설정 → ses
+          2) application.yml/properties의 외부 서비스 설정
+             - spring.data.redis 또는 spring.redis → elasticache
+             - spring.mail.host가 email-smtp.*.amazonaws.com → ses
+             - cloud.aws.* 설정 → 해당 서비스
+          3) src/ 소스 코드의 import 및 클라이언트 사용
+             - S3Client, AmazonS3 → s3
+             - ElastiCacheClient → elasticache
+             - SesClient, AmazonSimpleEmailService → ses
+             - SqsClient → sqs
+             - JavaMailSender with SES → ses
+
+          ### Step 3: IAM Policy 생성 (EKS Pod용 IRSA 전용)
+          iam-policy-autopilot MCP 서버를 사용해 IAM policy를 생성하세요.
+
+          **AWS SDK 의존성(software.amazon.awssdk 또는 com.amazonaws)이 build.gradle에 있는 경우:**
+          generate_application_policies를 호출하세요.
+
+          호출 시 주의사항:
+          - SourceFiles: Bash의 find 결과를 그대로 사용할 것
+            (find src/main/java -name "*.java" 결과를 그대로 넣을 것)
+          - ServiceHints: Step 2에서 감지된 서비스만 포함
+          - Region: AWS_REGION 환경변수 값
+          - Account: "000000000000" (실제 계정 ID 미확정)
+
+          **AWS SDK 의존성이 없는 경우:**
+          MCP를 호출하지 말고 아래 인프라 권한만 직접 작성하세요:
+          - ecr:GetAuthorizationToken (Resource: *)
+          - ecr:BatchGetImage, ecr:GetDownloadUrlForLayer,
+            ecr:BatchCheckLayerAvailability (Resource: ECR 레포지토리 ARN)
+          - Step 2에서 감지된 서비스가 있으면 해당 서비스의 최소 권한 추가
+
+          MCP 호출이 실패하면 위 인프라 권한 + Step 2 감지 결과로 직접 작성하세요.
+
+          ### Step 4: 메모리/CPU 추정
+          Step 1~2 결과를 바탕으로 EKS Deployment의 resources를 추정하세요.
 
           **메모리 추정 우선순위:**
           1순위: Dockerfile의 JAVA_OPTS에 -Xmx가 있으면
@@ -136,7 +195,7 @@ jobs:
 
           추정 근거를 RESOURCES.md에 반드시 명시하세요.
 
-          ### Step 4: docs/resources/ 디렉터리에 파일 3개 생성
+          ### Step 5: docs/resources/ 디렉터리에 파일 3개 생성
 
           **파일 1: docs/resources/iam-policy.json**
           EKS Pod (IRSA)용 IAM 정책만 작성하세요.
@@ -167,14 +226,14 @@ jobs:
           }
 
           **파일 2: docs/resources/k8s-resources.yaml**
-          Step 1~3의 분석 결과를 반영해서 작성하세요.
+          Step 1~4의 분석 결과를 반영해서 작성하세요.
           아래 구조를 그대로 따르세요.
 
           주의사항:
           - env는 application.yml에서 확인된 환경변수만 포함
           - startupProbe path는 actuator 설정 기반으로 결정
             (actuator 있으면 /actuator/health, 없으면 코드에서 확인한 헬스체크 경로)
-          - resources.requests/limits는 Step 3 추정값 사용
+          - resources.requests/limits는 Step 4 추정값 사용
           - nodeSelector, tolerations는 EKS 노드그룹 미확정이므로 <PLACEHOLDER> 처리
 
           ---
@@ -313,7 +372,7 @@ jobs:
              - 트리거 이슈: #${ISSUE_NUMBER}
              - 분석 방법: 정적 코드 분석 + iam-policy-autopilot MCP
 
-          ### Step 5: 완료 확인
+          ### Step 6: 완료 확인
           생성한 파일 3개의 경로를 출력하고 각 파일의 핵심 내용을 요약하세요.
           특히 메모리 추정에 어떤 방법(1/2/3순위)을 사용했는지 명시하세요.
           PROMPT
@@ -328,7 +387,7 @@ jobs:
           mcp_config: /tmp/mcp/config.json
           allowed_tools: >-
             Read,Write,Edit,
-            Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),
+            Bash(find:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*),Bash(grep:*),
             mcp__iam-policy-autopilot__generate_application_policies
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: "false"
