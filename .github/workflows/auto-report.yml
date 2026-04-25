@@ -45,7 +45,7 @@ jobs:
                 "command": "uvx",
                 "args": ["iam-policy-autopilot", "mcp-server"],
                 "env": {
-                  "AWS_REGION": "${{ vars.AWS_REGION || 'ap-northeast-2' }}",
+                  "AWS_REGION": "${{ vars.AWS_REGION || 'ap-northeast-2' }}"
                 }
               }
             }
