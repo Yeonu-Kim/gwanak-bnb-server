@@ -1,0 +1,15 @@
+name: Deploy-api-prod
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      ocir_repository: airbnb-prod/airbnb-server
+      dockerfile: Dockerfile
+    secrets:
+      OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+      OCIR_USERNAME: ${{ secrets.OCIR_USERNAME }}
